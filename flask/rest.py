@@ -1,12 +1,16 @@
 from tensorflow.keras.preprocessing.image import img_to_array
 from tensorflow.keras.models import load_model
 from tensorflow.keras.backend import clear_session
+import tensorflow as tf
 import numpy as np
 import pickle
 import cv2
 import flask
 import magic
 import gc
+import io
+from base64 import encodebytes
+from PIL import Image
 
 # import for extract color
 from sklearn.cluster import KMeans
@@ -15,21 +19,37 @@ import collections
 
 app = flask.Flask(__name__)
 
-model_c = "./model_category/multiCategory.model"
-labelbin_c = "./model_category/mlb.pickle"
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    try:
+        # Currently, memory growth needs to be the same across GPUs
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+        print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
+    except RuntimeError as e:
+        # Memory growth must be set before GPUs have been initialized
+        print(e)
+
+# model_c = "./model_category/multiCategory.model"
+# labelbin_c = "./model_category/mlb.pickle"
+model_c = "./model_category/category.model"
+labelbin_c = "./model_category/lb.pickle"
 model_t = "./model_texture/texture.model"
 labelbin_t = "./model_texture/lb.pickle"
 model_f = "./model_fabric/fabric.model"
 labelbin_f = "./model_fabric/lb.pickle"
 
-# modelc = load_model(model_c)
-# lbc = pickle.loads(open(labelbin_c, "rb").read())
-# modelt = load_model(model_t)
-# lbt = pickle.loads(open(labelbin_t, "rb").read())
+modelc = load_model(model_c)
+lbc = pickle.loads(open(labelbin_c, "rb").read())
+modelt = load_model(model_t)
+lbt = pickle.loads(open(labelbin_t, "rb").read())
 # modelf = load_model(model_f)
 # lbf = pickle.loads(open(labelbin_f, "rb").read())
 
 clt = KMeans(n_clusters = 2)    # 일단, 배경과 옷으로 생각
+
+
 
 
 def pre_process_image(image, target):
@@ -64,11 +84,13 @@ def predict_single_label(image, model, lb):
         proba = model.predict(image)[0]
         idx = np.argmax(proba)
         label = lb.classes_[idx]
+        # print("label: ", label)
         # labelc = "{}: {:.2f}% ({})".format(label, probac[idx] * 100, "")
         # print("multi-label: "+label)
+        return label
     except:
         return False
-    return label
+
 
 def predict_color(image):
     # extract color
@@ -103,60 +125,97 @@ def predict_color(image):
             B = color[2]
             break
         count+=1 # 주석?
-    return (R,G,B)
+    return R,G,B
+
+def getCategory(subCategory):
+    top = ["blouse", "longTshirt", "shortTshirt", "sleeveless"]
+    bottom = ["longPants", "shortPants", "skirt"]
+    dress = ["dress"]
+    outer = ["cardigan&vest", "coat", "jacket", "jumper"]
+    shoes = ["shoes"]
+    etc = ["bag"]
+
+    if subCategory in top:
+        category = "상의"
+    elif subCategory in bottom:
+        category = "하의"
+    elif subCategory in dress:
+        category = "원피스"
+    elif subCategory in outer:
+        category = "아우터"
+    elif subCategory in shoes:
+        category = "신발"
+    elif subCategory in etc:
+        category = "악세서리"
+    else:
+        category = "상의"
+
+    return category
+
+@app.route("/post_image_temp", methods=["POST"])
+def process_image():
+    data = {"error": False, "message": "Hello World"}
+    file = flask.request.files['image']
+    # Read the image via file.stream
+    # img = Image.open(file.stream)
+    try:
+        npimg = np.fromfile(file, np.uint8)
+        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        # img = cv2.imread(file.read())
+        R, G, B = predict_color(img)
+        # message = 'img.width: ' + str(img.width) + ", "+ 'img.height: ' + str(img.height)
+        message = "R: " + str(R) + ", G: " + str(G) + ", B: " + str(B)
+        data["message"] = message
+    except:
+        data["message"] = "error"
+    return flask.jsonify(data)
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    # time1 = tracemalloc.take_snapshot()
     data = {"success": False}
-    if flask.request.method == "POST":
-        if flask.request.files.get("image"):
-            postImage = flask.request.files["image"].read()
-            extention = magic.from_buffer(postImage).split()[0].upper()
-            image = cv2.imread(postImage)
-            color_image = image.copy()
-            image = pre_process_image(image, target=(96, 96))
-            if image is False:
-                return flask.jsonify(data)
+    label_category = "unknown"
+    label_texture = "unknown"
+    label_fabric = "unknown"
+    R = 0
+    G = 0
+    B = 0
+    if flask.request.files.get("image"):
+        file = flask.request.files["image"]
+        npimg = np.fromfile(file, np.uint8)
+        image = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        color_image = image.copy()
+        image = pre_process_image(image, target=(96, 96))
+        if image is False:
+            return flask.jsonify(data)
 
-            # predict category, sub_category
-            label_category1, label_category2 = predict_multi_label(image, modelc, lbc) 
-            # predict texture
-            label_texture = predict_single_label(image, modelt, lbt)
-            # predict fabric
-            label_fabric = predict_single_label(image, modelf, lbf)
-            # predict color
-            R, G, B  = predict_color(color_image)
+        # predict category, texture, (fabric), color
+        label_category = predict_single_label(image, modelc, lbc)
+        label_texture = predict_single_label(image, modelt, lbt)
+        # label_fabric = predict_single_label(image, modelf, lbf)
+        R, G, B = predict_color(color_image)
+        clear_session()
+        image = None
+        data["success"] = True
 
-            if label_category1 is False:
-                label_category1 = "unknown"
-                label_category2 = "unknown"
-            if label_texture is False:
-                label_texture = "unknown"
-            if label_fabric is False:
-                label_fabric = "unknown"
+    data["category"] = getCategory(label_category)
+    data["subCategory"] = label_category
+    data["texture"] = label_texture
+    data["fabric"] = label_fabric
+    data["R"] = R
+    data["G"] = G
+    data["B"] = B
 
-            clear_session()
-            image = None
-            postImage = None
-            data["category1"] = label_category1
-            data["category2"] = label_category2
-            data["texture"] = label_texture
-            data["fabric"] = label_fabric
-            data["colorR"] = R
-            data["colorG"] = G
-            data["colorB"] = B
-            data["success"] = True
-            app.logger.info(data)
+    app.logger.info(data)
     gc.collect()
     return flask.jsonify(data)
 
 # 연결 확인용
 @app.route('/')
 def hello_world():
-    return 'Hello World!'
+    data = {"error": False, "message": "Hello World"}
+    return flask.jsonify(data)
 
 if __name__ == "__main__":
     print(("* Loading Keras model and Flask starting server..."
         "please wait until server has fully started"))
-    app.run(host='114.70.23.80', port=1205)
+    app.run(host='114.70.23.158', port=1205)
