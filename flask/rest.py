@@ -151,7 +151,7 @@ def removeBackground(file_name, image):
     # 1) remove-bg 적용하지 않을 시: 1) 아래 주석 풀고, 2) 아래 주석처리
     # input_path = root_path_before + file_name + ".jpg"
     # cv2.imwrite(input_path, image)
-    # return True, image
+    # return False, image
     # 2) remove-bg 적용 부분
     input_path = root_path_before + file_name + ".jpg"
     output_path = root_path_after + file_name + ".png"
