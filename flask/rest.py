@@ -11,7 +11,7 @@ import gc
 import io
 from base64 import encodebytes
 from PIL import Image
-
+import requests  # for remove bg
 # import for extract color
 from sklearn.cluster import KMeans
 import utils
@@ -49,7 +49,7 @@ lbt = pickle.loads(open(labelbin_t, "rb").read())
 
 clt = KMeans(n_clusters = 2)    # 일단, 배경과 옷으로 생각
 
-
+REMOVEBG_API_KEY = "FgGa18D74Hk7Fe5UAt31bBnT"
 
 
 def pre_process_image(image, target):
@@ -143,23 +143,47 @@ def getCategory(subCategory):
 
     return category
 
-@app.route("/post_image_temp", methods=["POST"])
-def process_image():
-    data = {"error": False, "message": "Hello World"}
-    file = flask.request.files['image']
-    # Read the image via file.stream
-    # img = Image.open(file.stream)
-    try:
-        npimg = np.fromfile(file, np.uint8)
-        img = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-        # img = cv2.imread(file.read())
-        R, G, B = predict_color(img)
-        # message = 'img.width: ' + str(img.width) + ", "+ 'img.height: ' + str(img.height)
-        message = "R: " + str(R) + ", G: " + str(G) + ", B: " + str(B)
-        data["message"] = message
-    except:
-        data["message"] = "error"
-    return flask.jsonify(data)
+
+root_path_before = "upload/"
+root_path_after = "result/"
+
+def removeBackground(file_name, image):
+    # 1) remove-bg 적용하지 않을 시: 1) 아래 주석 풀고, 2) 아래 주석처리
+    # input_path = root_path_before + file_name + ".jpg"
+    # cv2.imwrite(input_path, image)
+    # return True, image
+    # 2) remove-bg 적용 부분
+    input_path = root_path_before + file_name + ".jpg"
+    output_path = root_path_after + file_name + ".png"
+    cv2.imwrite(input_path, image)
+    # remove-bg
+    response = requests.post(
+        'https://api.remove.bg/v1.0/removebg',
+        files={'image_file': open(input_path, 'rb')},
+        data={'size': 'auto'},
+        headers={'X-Api-Key': REMOVEBG_API_KEY},
+    )
+    if response.status_code == requests.codes.ok:
+        with open(output_path, 'wb') as out:
+            out.write(response.content)
+            return True, cv2.imread(output_path)
+    else:
+        print("Error:", response.status_code, response.text)
+        return False, image
+
+def get_response_image(isSuccess, file_name):
+    input_path = root_path_before + file_name + ".jpg"
+    output_path = root_path_after + file_name + ".png"
+    if isSuccess:
+        image_path = output_path
+    else:
+        image_path = input_path
+
+    pil_img = Image.open(image_path, mode='r') # reads the PIL image
+    byte_arr = io.BytesIO()
+    pil_img.save(byte_arr, format='PNG') # convert the PIL image to byte array
+    encoded_img = encodebytes(byte_arr.getvalue()).decode('ascii') # encode as base64
+    return encoded_img
 
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -170,10 +194,13 @@ def predict():
     R = 0
     G = 0
     B = 0
+    isSuccess = False
+    file_name = "temp" # TODO 이미지 이름 -> timestamp로 auto 생성
     if flask.request.files.get("image"):
         file = flask.request.files["image"]
         npimg = np.fromfile(file, np.uint8)
         image = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
+        isSuccess, image = removeBackground(file_name, image)
         color_image = image.copy()
         image = pre_process_image(image, target=(96, 96))
         if image is False:
@@ -191,14 +218,17 @@ def predict():
     data["category"] = getCategory(label_category)
     data["subCategory"] = label_category
     data["texture"] = label_texture
-    data["fabric"] = label_fabric
+    # data["fabric"] = label_fabric
     data["R"] = R
     data["G"] = G
     data["B"] = B
 
+    encoded_img = get_response_image(isSuccess, file_name)
+    data["encodedImage"] = encoded_img
+
     app.logger.info(data)
     gc.collect()
-    return flask.jsonify(data)
+    return flask.json.dumps(data)
 
 # 연결 확인용
 @app.route('/')
