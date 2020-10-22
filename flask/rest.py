@@ -130,25 +130,16 @@ def predict_color(image):
 def getCategory(subCategory):
     top = ["blouse", "longTshirt", "shortTshirt", "sleeveless"]
     bottom = ["longPants", "shortPants", "skirt"]
-    dress = ["dress"]
     outer = ["cardigan&vest", "coat", "jacket", "jumper"]
-    shoes = ["shoes"]
-    etc = ["bag"]
 
     if subCategory in top:
-        category = "상의"
+        category = "top"
     elif subCategory in bottom:
-        category = "하의"
-    elif subCategory in dress:
-        category = "원피스"
+        category = "bottom"
     elif subCategory in outer:
-        category = "아우터"
-    elif subCategory in shoes:
-        category = "신발"
-    elif subCategory in etc:
-        category = "악세서리"
+        category = "outer"
     else:
-        category = "상의"
+        category = subCategory
 
     return category
 
