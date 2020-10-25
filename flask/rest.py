@@ -50,7 +50,43 @@ lbt = pickle.loads(open(labelbin_t, "rb").read())
 clt = KMeans(n_clusters = 2)    # 일단, 배경과 옷으로 생각
 
 REMOVEBG_API_KEY = "FgGa18D74Hk7Fe5UAt31bBnT"
+root_path_before = "upload/"
+root_path_after = "result/"
+file_name = "temp"  # TODO 이미지 이름 -> timestamp로 auto 생성
 
+def setTransparencyLayerWhite(image):
+    print("setTransparencyLayerWhite")
+    # make mask of where the transparent bits are
+    trans_mask = image[:, :, 3] == 0
+    # replace areas of transparency with white and not transparent
+    image[trans_mask] = [255, 255, 255, 255]
+    # new image without alpha channel...
+    new_img = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    input_path = root_path_before + file_name + ".png"
+    cv2.imwrite(input_path, new_img)
+    return new_img
+
+def removeBackground(file_name, image):
+    print("removeBackground")
+    # 1) remove-bg 적용하지 않을 시: 1) 아래 주석 풀고, 2) 아래 주석처리
+    # return False, image
+    # 2) remove-bg 적용 부분
+    input_path = root_path_before + file_name + ".png"
+    output_path = root_path_after + file_name + ".png"
+    # # remove-bg
+    response = requests.post(
+        'https://api.remove.bg/v1.0/removebg',
+        files={'image_file': open(input_path, 'rb')},
+        data={'size': 'auto'},
+        headers={'X-Api-Key': REMOVEBG_API_KEY},
+    )
+    if response.status_code == requests.codes.ok:
+        with open(output_path, 'wb') as out:
+            out.write(response.content)
+            return True, cv2.imread(output_path)
+    else:
+        # print("Error:", response.status_code, response.text)
+        return False, image
 
 def pre_process_image(image, target):
     try:
@@ -61,23 +97,6 @@ def pre_process_image(image, target):
     except:
         return False
     return image
-
-def predict_multi_label(image, model, lb):
-    try:
-        proba = model.predict(image)[0]
-        idx = np.argmax(proba)[::-1][:2]
-        predicts = []
-        case = 0
-        for (i, j) in enumerate(idx):
-            predicts[case] = lb.classes_[j]
-            case += 1
-            # label = "{}: {:.2f}%".format(lb.classes_[j], proba[j] * 100)
-            # print("multi-label: "+label)
-        label1 = predicts[0]
-        label2 = predicts[1]
-    except:
-        return (False, 0)
-    return (label1, label2)
 
 def predict_single_label(image, model, lb):
     try:
@@ -91,7 +110,6 @@ def predict_single_label(image, model, lb):
     except:
         print("error")
         return False
-
 
 def predict_color(image):
     print("predict_color")
@@ -147,43 +165,10 @@ def getCategory(subCategory):
 
     return category
 
-
-root_path_before = "upload/"
-root_path_after = "result/"
-
-def removeBackground(file_name, image):
-    print("removeBackground")
-    # 1) remove-bg 적용하지 않을 시: 1) 아래 주석 풀고, 2) 아래 주석처리
-    input_path = root_path_before + file_name + ".png"
-    cv2.imwrite(input_path, image)
-    return False, image
-    # 2) remove-bg 적용 부분
-    # input_path = root_path_before + file_name + ".png"
-    # output_path = root_path_after + file_name + ".png"
-    # cv2.imwrite(input_path, image)
-    # # remove-bg
-    # response = requests.post(
-    #     'https://api.remove.bg/v1.0/removebg',
-    #     files={'image_file': open(input_path, 'rb')},
-    #     data={'size': 'auto'},
-    #     headers={'X-Api-Key': REMOVEBG_API_KEY},
-    # )
-    # if response.status_code == requests.codes.ok:
-    #     with open(output_path, 'wb') as out:
-    #         out.write(response.content)
-    #         return True, cv2.imread(output_path)
-    # else:
-    #     print("Error:", response.status_code, response.text)
-    #     return False, image
-
 def get_response_image(isSuccess, file_name):
     print("get_response_image")
-    input_path = root_path_before + file_name + ".png"
     output_path = root_path_after + file_name + ".png"
-    if isSuccess:
-        image_path = output_path
-    else:
-        image_path = input_path
+    image_path = output_path
 
     pil_img = Image.open(image_path, mode='r') # reads the PIL image
     byte_arr = io.BytesIO()
@@ -191,15 +176,26 @@ def get_response_image(isSuccess, file_name):
     encoded_img = encodebytes(byte_arr.getvalue()).decode('ascii') # encode as base64
     return encoded_img
 
-def setTransparencyLayerWhite(image):
-    print("setTransparencyLayerWhite")
-    # make mask of where the transparent bits are
-    trans_mask = image[:, :, 3] == 0
-    # replace areas of transparency with white and not transparent
-    image[trans_mask] = [255, 255, 255, 255]
-    # new image without alpha channel...
-    new_img = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
-    return new_img
+
+
+def predict_multi_label(image, model, lb):
+    try:
+        proba = model.predict(image)[0]
+        idx = np.argmax(proba)[::-1][:2]
+        predicts = []
+        case = 0
+        for (i, j) in enumerate(idx):
+            predicts[case] = lb.classes_[j]
+            case += 1
+            # label = "{}: {:.2f}%".format(lb.classes_[j], proba[j] * 100)
+            # print("multi-label: "+label)
+        label1 = predicts[0]
+        label2 = predicts[1]
+    except:
+        return (False, 0)
+    return (label1, label2)
+
+
 
 @app.route("/predict", methods=["POST"])
 def predict():
@@ -213,38 +209,27 @@ def predict():
     isSuccess = False
     file_name = "temp" # TODO 이미지 이름 -> timestamp로 auto 생성
     if flask.request.files.get("image"):
-        print(1)
         file = flask.request.files["image"]
         npimg = np.fromfile(file, np.uint8)
-        # ** 에러 (extention알아내기와 imdecode를 동시에 못함 -> 모르겠음)
-        # postImage = flask.request.files["image"].read()
-        # extention = magic.from_buffer(postImage).split()[0].upper()
-        # print("extention: "+extention)
-        # if extention != "JPEG" and extention != "PNG":
-        #     return flask.jsonify(data)
-        # if extention == 'PNG':
-        image = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED)
-        image = setTransparencyLayerWhite(image)
-        # else:
-        #     image = cv2.imdecode(npimg, cv2.IMREAD_COLOR)
-        isSuccess, image = removeBackground(file_name, image)
-        color_image = image.copy()
-        image = pre_process_image(image, target=(96, 96))
-        if image is False:
-            print(2)
-            return flask.jsonify(data)
+        image = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED) # png는 4channel로 받아옴
 
-        print(3)
+        color_image = setTransparencyLayerWhite(image) # 이거 처리를 해줘야 모델 결과, color 제대로 나옴
         # predict category, texture, (fabric), color
-        label_category = predict_single_label(image, modelc, lbc)
-        label_texture = predict_single_label(image, modelt, lbt)
-        # label_fabric = predict_single_label(image, modelf, lbf)
+        test_image = pre_process_image(color_image, target=(96, 96))
+        label_category = predict_single_label(test_image, modelc, lbc)
+        label_texture = predict_single_label(test_image, modelt, lbt)
         R, G, B = predict_color(color_image)
+
+        isSuccess, image = removeBackground(file_name, image)
+        if isSuccess:
+            encoded_img = get_response_image(file_name)
+        else:
+            encoded_img = ""
+
         clear_session()
         image = None
         data["success"] = True
 
-    print(4)
     data["category"] = getCategory(label_category)
     data["subCategory"] = label_category
     data["texture"] = label_texture
@@ -253,7 +238,6 @@ def predict():
     data["G"] = G
     data["B"] = B
     print(data)
-    encoded_img = get_response_image(isSuccess, file_name)
     data["encodedImage"] = encoded_img
 
     app.logger.info(data)
