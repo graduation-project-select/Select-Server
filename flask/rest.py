@@ -49,7 +49,8 @@ lbt = pickle.loads(open(labelbin_t, "rb").read())
 
 clt = KMeans(n_clusters = 2)    # 일단, 배경과 옷으로 생각
 
-REMOVEBG_API_KEY = "FgGa18D74Hk7Fe5UAt31bBnT"
+# REMOVEBG_API_KEY = "FgGa18D74Hk7Fe5UAt31bBnT"
+REMOVEBG_API_KEY = "bzzgGJ3GZMBR8gKW44auoTax"
 root_path_before = "upload/"
 root_path_after = "result/"
 file_name = "temp"  # TODO 이미지 이름 -> timestamp로 auto 생성
@@ -69,24 +70,26 @@ def setTransparencyLayerWhite(image):
 def removeBackground(file_name, image):
     print("removeBackground")
     # 1) remove-bg 적용하지 않을 시: 1) 아래 주석 풀고, 2) 아래 주석처리
-    # return False, image
+    return False, image
     # 2) remove-bg 적용 부분
-    input_path = root_path_before + file_name + ".png"
-    output_path = root_path_after + file_name + ".png"
-    # # remove-bg
-    response = requests.post(
-        'https://api.remove.bg/v1.0/removebg',
-        files={'image_file': open(input_path, 'rb')},
-        data={'size': 'auto'},
-        headers={'X-Api-Key': REMOVEBG_API_KEY},
-    )
-    if response.status_code == requests.codes.ok:
-        with open(output_path, 'wb') as out:
-            out.write(response.content)
-            return True, cv2.imread(output_path)
-    else:
-        # print("Error:", response.status_code, response.text)
-        return False, image
+    # input_path = root_path_before + file_name + ".png"
+    # output_path = root_path_after + file_name + ".png"
+    # new_img = cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
+    # cv2.imwrite(input_path, new_img)
+    # # # remove-bg
+    # response = requests.post(
+    #     'https://api.remove.bg/v1.0/removebg',
+    #     files={'image_file': open(input_path, 'rb')},
+    #     data={'size': 'auto'},
+    #     headers={'X-Api-Key': REMOVEBG_API_KEY},
+    # )
+    # if response.status_code == requests.codes.ok:
+    #     with open(output_path, 'wb') as out:
+    #         out.write(response.content)
+    #         return True, cv2.imread(output_path)
+    # else:
+    #     # print("Error:", response.status_code, response.text)
+    #     return False, image
 
 def pre_process_image(image, target):
     try:
@@ -165,7 +168,7 @@ def getCategory(subCategory):
 
     return category
 
-def get_response_image(isSuccess, file_name):
+def get_response_image(file_name):
     print("get_response_image")
     output_path = root_path_after + file_name + ".png"
     image_path = output_path
@@ -201,26 +204,31 @@ def predict_multi_label(image, model, lb):
 def predict():
     data = {"success": False}
     label_category = "unknown"
-    label_texture = "unknown"
-    label_fabric = "unknown"
+    label_texture = "none"
     R = 0
     G = 0
     B = 0
-    isSuccess = False
     file_name = "temp" # TODO 이미지 이름 -> timestamp로 auto 생성
     if flask.request.files.get("image"):
         file = flask.request.files["image"]
         npimg = np.fromfile(file, np.uint8)
         image = cv2.imdecode(npimg, cv2.IMREAD_UNCHANGED) # png는 4channel로 받아옴
-
-        color_image = setTransparencyLayerWhite(image) # 이거 처리를 해줘야 모델 결과, color 제대로 나옴
+        isSuccess, image = removeBackground(file_name, image)
+        print("removeBG isSuccess:", isSuccess)
+        if isSuccess:
+            color_image = image
+        else:
+            color_image = setTransparencyLayerWhite(image) # 이거 처리를 해줘야 모델 결과, color 제대로 나옴 (png일때)
         # predict category, texture, (fabric), color
         test_image = pre_process_image(color_image, target=(96, 96))
         label_category = predict_single_label(test_image, modelc, lbc)
-        label_texture = predict_single_label(test_image, modelt, lbt)
+        if(label_category == "bag" or label_category == "shoes"):
+            label_texture = "none"
+        else:
+            label_texture = predict_single_label(test_image, modelt, lbt)
         R, G, B = predict_color(color_image)
 
-        isSuccess, image = removeBackground(file_name, image)
+
         if isSuccess:
             encoded_img = get_response_image(file_name)
         else:
@@ -233,13 +241,12 @@ def predict():
     data["category"] = getCategory(label_category)
     data["subCategory"] = label_category
     data["texture"] = label_texture
-    # data["fabric"] = label_fabric
     data["R"] = R
     data["G"] = G
     data["B"] = B
     print(data)
     data["encodedImage"] = encoded_img
-
+    print(data["encodedImage"])
     app.logger.info(data)
     gc.collect()
     return flask.json.dumps(data)
